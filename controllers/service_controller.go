@@ -79,10 +79,11 @@ type ServiceReconciler struct {
 	ServiceMonitorCRDExists bool
 }
 
-// +kubebuilder:rbac:namespace="model-serving",groups="monitoring.coreos.com",resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="monitoring.coreos.com",resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.Log.V(1).Info("Service reconciler called")
+
 	cfg := r.ConfigProvider.GetConfig()
 	var changed bool
 	if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() {
@@ -174,6 +175,7 @@ func (r *ServiceReconciler) tlsConfigFromSecret(ctx context.Context, secretName 
 func (r *ServiceReconciler) applyService(ctx context.Context, d *appsv1.Deployment) (error, bool) {
 	s := &corev1.Service{}
 	serviceName := r.ModelMeshService.Name
+
 	exists := true
 	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: r.ControllerDeployment.Namespace}, s)
 	if k8serr.IsNotFound(err) {
@@ -225,11 +227,6 @@ func (r *ServiceReconciler) applyService(ctx context.Context, d *appsv1.Deployme
 			Port:       int32(r.ModelMeshService.RESTPort),
 			TargetPort: intstr.FromString("http"),
 		})
-	}
-
-	err = controllerutil.SetControllerReference(d, s, r.Scheme)
-	if err != nil {
-		return fmt.Errorf("Could not set owner reference: %w", err), false
 	}
 
 	if !exists {
@@ -327,7 +324,7 @@ func (r *ServiceReconciler) ReconcileServiceMonitor(ctx context.Context, metrics
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	filter := func(meta metav1.Object) bool {
 		return meta.GetName() == r.ControllerDeployment.Name &&
-			meta.GetNamespace() == r.ControllerDeployment.Namespace
+                       meta.GetNamespace() == r.ControllerDeployment.Namespace
 	}
 	builder := ctrl.NewControllerManagedBy(mgr).
 		Named("ServiceReconciler").

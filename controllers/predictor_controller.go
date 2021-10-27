@@ -69,11 +69,12 @@ type PredictorReconciler struct {
 // +kubebuilder:rbac:namespace=model-serving,groups=serving.kserve.io,resources=inferenceservices/finalizers,verbs=get;update;patch
 // +kubebuilder:rbac:namespace=model-serving,groups=serving.kserve.io,resources=inferenceservices/status,verbs=get;update;patch
 // This one is used by the kube-based grpc resolver but need to set it here so that kubebuilder picks it up
-// +kubebuilder:rbac:namespace=model-serving,groups="",resources=endpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 
 func (pr *PredictorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	nname := req.NamespacedName
 	namespace := nname.Namespace
+
 	// Check if namespace has a source prefix
 	i := strings.LastIndex(namespace, "_")
 	nname.Namespace = namespace[i+1:]
