@@ -23,7 +23,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const defaultTypeConstraint = "_default"
@@ -50,6 +49,7 @@ type ClusterConfig struct {
 
 func (cc ClusterConfig) Apply(ctx context.Context, owner metav1.Object, cl client.Client) error {
 	commonLabelValue := "modelmesh-controller"
+
 	m := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      InternalConfigMapName,
@@ -62,12 +62,8 @@ func (cc ClusterConfig) Apply(ctx context.Context, owner metav1.Object, cl clien
 		},
 	}
 	cc.addConstraints(cc.Runtimes, m)
-	err := controllerutil.SetControllerReference(owner, m, cc.Scheme)
-	if err != nil {
-		return err
-	}
-
-	if err = cl.Create(ctx, m); err != nil && errors.IsAlreadyExists(err) {
+	err := cl.Create(ctx, m)
+	if err != nil && errors.IsAlreadyExists(err) {
 		err = cl.Update(ctx, m)
 	}
 

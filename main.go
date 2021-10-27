@@ -186,7 +186,6 @@ func main() {
 	mgrOpts := ctrl.Options{
 		Scheme:                 scheme,
 		MetricsBindAddress:     metricsAddr,
-		Namespace:              ControllerNamespace,
 		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
 	}
@@ -228,7 +227,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	mmService := mmesh.NewMMService()
+	//mmService := mmesh.NewMMService()
+	mmServiceMap := make(map[string]*mmesh.MMService)
 
 	modelEventStream, err := mmesh.NewModelEventStream(ctrl.Log.WithName("ModelMeshEventStream"),
 		mgr.GetClient(), ControllerNamespace)
@@ -254,7 +254,7 @@ func main() {
 		Log:                     ctrl.Log.WithName("controllers").WithName("Service"),
 		Scheme:                  mgr.GetScheme(),
 		ControllerDeployment:    types.NamespacedName{Namespace: ControllerNamespace, Name: controllerDeploymentName},
-		ModelMeshService:        mmService,
+		ModelMeshService:        mmServiceMap,
 		ModelEventStream:        modelEventStream,
 		ConfigProvider:          cp,
 		ConfigMapName:           types.NamespacedName{Namespace: ControllerNamespace, Name: UserConfigMapName},
@@ -345,7 +345,7 @@ func main() {
 	if err = (&controllers.PredictorReconciler{
 		Client:         mgr.GetClient(),
 		Log:            ctrl.Log.WithName("controllers").WithName("Predictor"),
-		MMService:      mmService,
+		MMService:      mmServiceMap,
 		RegistryLookup: registryMap,
 	}).SetupWithManager(mgr, modelEventStream, enableIsvcWatch, predictorControllerEvents); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Predictor")

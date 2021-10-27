@@ -80,11 +80,11 @@ type runtimeInfo struct {
 var builtInServerTypes = map[api.ServerType]interface{}{
 	api.MLServer: nil, api.Triton: nil}
 
-// +kubebuilder:rbac:namespace="model-serving",groups=serving.kserve.io,resources=servingruntimes;servingruntimes/finalizers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:namespace="model-serving",groups=serving.kserve.io,resources=servingruntimes/status,verbs=get;update;patch
-// +kubebuilder:rbac:namespace="model-serving",groups=apps,resources=deployments;deployments/finalizers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:namespace="model-serving",groups="",resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:namespace="model-serving",groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=serving.kserve.io,resources=servingruntimes;servingruntimes/finalizers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=serving.kserve.io,resources=servingruntimes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apps,resources=deployments;deployments/finalizers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("servingruntime", req.NamespacedName)
@@ -183,13 +183,14 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	replicas, requeueDuration, err := r.determineReplicasAndRequeueDuration(ctx, log, config, rt)
+	replicas, requeueDuration, err := r.determineReplicasAndRequeueDuration(ctx, log, config, rt, req.Namespace)
 	if err != nil {
 		werr := fmt.Errorf("Could not determine replicas: %w", err)
 		return RequeueResult, werr
 	}
 	mmDeployment.Replicas = replicas
 	err = mmDeployment.Apply(ctx)
+
 	if err != nil {
 		if errors.IsConflict(err) {
 			// this can occur during normal operations if the deployment was updated
@@ -220,17 +221,17 @@ func validateServingRuntimeSpec(rt *api.ServingRuntime) error {
 	return fmt.Errorf("Must include runtime Container with name %s", st)
 }
 
-func (r *ServingRuntimeReconciler) determineReplicasAndRequeueDuration(ctx context.Context, log logr.Logger, config *Config, rt *api.ServingRuntime) (uint16, time.Duration, error) {
+func (r *ServingRuntimeReconciler) determineReplicasAndRequeueDuration(ctx context.Context, log logr.Logger, config *Config, rt *api.ServingRuntime, namespace string) (uint16, time.Duration, error) {
 	var err error
 	const scaledToZero = uint16(0)
 	scaledUp := r.determineReplicas(rt)
-
 	if !config.ScaleToZero.Enabled {
 		return scaledUp, time.Duration(0), nil
 	}
 
 	// check if the runtime has predictors before locking the mutex
-	hasPredictors, err := r.runtimeHasPredictors(ctx, rt)
+	hasPredictors, err := r.runtimeHasPredictors(ctx, rt, namespace)
+
 	if err != nil {
 		return 0, 0, err
 	}
@@ -302,13 +303,13 @@ func (r *ServingRuntimeReconciler) determineReplicas(rt *api.ServingRuntime) uin
 }
 
 // runtimeHasPredictors returns true if the runtime supports an existing Predictor
-func (r *ServingRuntimeReconciler) runtimeHasPredictors(ctx context.Context, rt *api.ServingRuntime) (bool, error) {
+func (r *ServingRuntimeReconciler) runtimeHasPredictors(ctx context.Context, rt *api.ServingRuntime, namespace string) (bool, error) {
 	f := func(p *api.Predictor) bool {
 		return runtimeSupportsPredictor(rt, p)
 	}
 
 	for _, pr := range r.RegistryMap {
-		if found, err := pr.Find(ctx, r.DeploymentNamespace, f); found || err != nil {
+		if found, err := pr.Find(ctx, namespace, f); found || err != nil {
 			return found, err
 		}
 	}
@@ -332,7 +333,7 @@ func (r *ServingRuntimeReconciler) getRuntimesSupportingPredictor(ctx context.Co
 
 	// list all runtimes
 	runtimes := &api.ServingRuntimeList{}
-	err = r.Client.List(ctx, runtimes, client.InNamespace(r.DeploymentNamespace))
+	err = r.Client.List(ctx, runtimes, client.InNamespace(p.Namespace))
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +343,7 @@ func (r *ServingRuntimeReconciler) getRuntimesSupportingPredictor(ctx context.Co
 		if runtimeSupportsPredictor(&rt, p) {
 			srnn := types.NamespacedName{
 				Name:      rt.GetName(),
-				Namespace: r.DeploymentNamespace,
+				Namespace: p.Namespace,
 			}
 			srnns = append(srnns, srnn)
 		}

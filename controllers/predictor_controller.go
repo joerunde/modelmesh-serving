@@ -57,7 +57,7 @@ const (
 type PredictorReconciler struct {
 	client.Client
 	Log       logr.Logger
-	MMService *mmesh.MMService
+	MMService map[string]*mmesh.MMService
 
 	RegistryLookup map[string]predictor_source.PredictorRegistry
 }
@@ -69,11 +69,12 @@ type PredictorReconciler struct {
 // +kubebuilder:rbac:namespace=model-serving,groups=serving.kserve.io,resources=inferenceservices/finalizers,verbs=get;update;patch
 // +kubebuilder:rbac:namespace=model-serving,groups=serving.kserve.io,resources=inferenceservices/status,verbs=get;update;patch
 // This one is used by the kube-based grpc resolver but need to set it here so that kubebuilder picks it up
-// +kubebuilder:rbac:namespace=model-serving,groups="",resources=endpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 
 func (pr *PredictorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	nname := req.NamespacedName
 	namespace := nname.Namespace
+
 	// Check if namespace has a source prefix
 	i := strings.LastIndex(namespace, "_")
 	nname.Namespace = namespace[i+1:]
@@ -110,7 +111,7 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	status := &predictor.Status
 	waitingBefore := status.WaitingForRuntime()
 	updateStatus := false
-	mmc := pr.MMService.MMClient()
+	mmc := pr.MMService[nname.Namespace].MMClient()
 	var finalErr error
 	if predictor.Spec.Storage != nil && predictor.Spec.Storage.S3 == nil {
 		log.Info("Only S3 Storage currently supported", "Storage", predictor.Spec.Storage)
@@ -249,7 +250,7 @@ var transitionStatusMap = map[mmeshapi.VModelStatusInfo_VModelStatus]api.Transit
 
 func (pr *PredictorReconciler) handlePredictorNotFound(ctx context.Context,
 	name types.NamespacedName, sourceId string) (ctrl.Result, error) {
-	mmc := pr.MMService.MMClient()
+	mmc := pr.MMService[name.Namespace].MMClient()
 	if mmc == nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -446,8 +447,8 @@ func (pr *PredictorReconciler) updatePredictorStatusFromVModel(status *api.Predi
 
 	status.Available = status.ActiveModelState != "" &&
 		status.ActiveModelState != api.FailedToLoad && !status.WaitingForRuntime()
-	status.GrpcEndpoint = fmt.Sprintf("grpc://%s", pr.MMService.InferenceEndpoint())
-	status.HTTPEndpoint = pr.MMService.InferenceRESTEndpoint()
+	status.GrpcEndpoint = fmt.Sprintf("grpc://%s", pr.MMService[name.Namespace].InferenceEndpoint())
+	status.HTTPEndpoint = pr.MMService[name.Namespace].InferenceRESTEndpoint()
 
 	// This will be reinstated once the loading/loaded counts are added back to the Predictor CRD Status
 	//if counts != [3]int{status.LoadingCopies, status.LoadedCopies, status.FailedCopies} {

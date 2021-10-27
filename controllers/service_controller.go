@@ -36,17 +36,13 @@ import (
 
 	"github.com/kserve/modelmesh-serving/controllers/modelmesh"
 
-	"sigs.k8s.io/controller-runtime/pkg/builder"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kserve/modelmesh-serving/pkg/mmesh"
 
 	"github.com/go-logr/logr"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,20 +69,22 @@ type ServiceReconciler struct {
 	ConfigMapName        types.NamespacedName
 	ControllerDeployment types.NamespacedName
 
-	ModelMeshService *mmesh.MMService
+	ModelMeshService map[string]*mmesh.MMService
 	ModelEventStream *mmesh.ModelMeshEventStream
 
 	ServiceMonitorCRDExists bool
 }
 
-// +kubebuilder:rbac:namespace="model-serving",groups="monitoring.coreos.com",resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="monitoring.coreos.com",resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.Log.V(1).Info("Service reconciler called")
+
 	cfg := r.ConfigProvider.GetConfig()
 	var changed bool
+	changedServices := []string{}
 	if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() {
-		tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName)
+		tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName, req.NamespacedName.Namespace)
 		if err != nil {
 			return RequeueResult, err
 		}
@@ -97,39 +95,42 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if cfg.RESTProxy.Enabled {
 			restProxyPort = cfg.RESTProxy.Port
 		}
-		changed = r.ModelMeshService.UpdateConfig(
-			cfg.InferenceServiceName, cfg.InferenceServicePort,
-			cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
-	}
 
-	d := &appsv1.Deployment{}
-	err := r.Client.Get(ctx, r.ControllerDeployment, d)
-	if err != nil {
-		if k8serr.IsNotFound(err) {
-			// No need to delete because the Deployment is the owner
-			return ctrl.Result{}, nil
+		// check for each in map
+		for namespace, mmSvc := range r.ModelMeshService {
+			changed = mmSvc.UpdateConfig(
+				cfg.InferenceServiceName, cfg.InferenceServicePort,
+				cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
+			if changed {
+				changedServices = append(changedServices, namespace)
+			}
 		}
-		return RequeueResult, fmt.Errorf("Could not get the controller deployment: %w", err)
 	}
 
-	if (changed || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
-		err2, requeue := r.applyService(ctx, d)
+	n := &corev1.Namespace{}
+	err := r.Client.Get(ctx, req.NamespacedName, n)
+
+	// check for label and if its not there delete owned service else call the stuff below
+	if (len(changedServices) > 0 || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
+		err2, requeue := r.applyService(ctx, n)
 		if err2 != nil || requeue {
 			//TODO probably shorter requeue time (immediate?) for service recreate case
 			return RequeueResult, err2
 		}
 	}
 
-	err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService.Name)
-	if err != nil {
-		return RequeueResult, err
+	for i := 0; i < len(changedServices); i++ {
+		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[changedServices[i]].Name)
+		if err != nil {
+			return RequeueResult, err
+		}
 	}
 
 	// Service Monitor reconciliation should be called towards the end of the Service Reconcile method so that
 	// errors returned from here should not impact any other functions.
 	if r.ServiceMonitorCRDExists {
 		// Reconcile Service Monitor if the ServiceMonitor CRD exists
-		err, requeue := r.ReconcileServiceMonitor(ctx, cfg.Metrics, d)
+		err, requeue := r.ReconcileServiceMonitor(ctx, cfg.Metrics, n)
 		if err != nil || requeue {
 			return RequeueResult, err
 		}
@@ -137,14 +138,14 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-func (r *ServiceReconciler) tlsConfigFromSecret(ctx context.Context, secretName string) (*tls.Config, error) {
+func (r *ServiceReconciler) tlsConfigFromSecret(ctx context.Context, secretName string, namespace string) (*tls.Config, error) {
 	if secretName == "" {
 		return nil, nil
 	}
 	tlsSecret := corev1.Secret{}
 	err := r.Client.Get(ctx, client.ObjectKey{
 		Name:      secretName,
-		Namespace: r.ControllerDeployment.Namespace}, &tlsSecret)
+		Namespace: namespace}, &tlsSecret)
 	if err != nil {
 		r.Log.Error(err, "Unable to access TLS secret", "secretName", secretName)
 		return nil, fmt.Errorf("unable to access TLS secret '%s': %v", secretName, err)
@@ -171,20 +172,21 @@ func (r *ServiceReconciler) tlsConfigFromSecret(ctx context.Context, secretName 
 	return &tls.Config{Certificates: []tls.Certificate{certificate}, RootCAs: certPool}, nil
 }
 
-func (r *ServiceReconciler) applyService(ctx context.Context, d *appsv1.Deployment) (error, bool) {
+func (r *ServiceReconciler) applyService(ctx context.Context, n *corev1.Namespace) (error, bool) {
 	s := &corev1.Service{}
-	serviceName := r.ModelMeshService.Name
+	serviceName := r.ModelMeshService[n.GetName()].Name
+
 	exists := true
-	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: r.ControllerDeployment.Namespace}, s)
+	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: n.GetName()}, s)
 	if k8serr.IsNotFound(err) {
 		exists = false
 		s.Name = serviceName
-		s.Namespace = r.ControllerDeployment.Namespace
+		s.Namespace = n.GetName()
 	} else if err != nil {
 		return err, false
 	}
 
-	headless := r.ModelMeshService.Headless
+	headless := r.ModelMeshService[n.GetName()].Headless
 	if exists && (s.Spec.ClusterIP == "None") != headless {
 		r.Log.Info("Deleting/recreating Service because headlessness changed",
 			"service", serviceName, "headless", headless)
@@ -206,43 +208,38 @@ func (r *ServiceReconciler) applyService(ctx context.Context, d *appsv1.Deployme
 	s.Spec.Ports = []corev1.ServicePort{
 		{
 			Name:       "grpc",
-			Port:       int32(r.ModelMeshService.Port),
+			Port:       int32(r.ModelMeshService[n.GetName()].Port),
 			TargetPort: intstr.FromString("grpc"),
 		},
 	}
 
-	if r.ModelMeshService.MetricsPort > 0 {
+	if r.ModelMeshService[n.GetName()].MetricsPort > 0 {
 		s.Spec.Ports = append(s.Spec.Ports, corev1.ServicePort{
 			Name:       "prometheus",
-			Port:       int32(r.ModelMeshService.MetricsPort),
+			Port:       int32(r.ModelMeshService[n.GetName()].MetricsPort),
 			TargetPort: intstr.FromString("prometheus"),
 		})
 	}
 
-	if r.ModelMeshService.RESTPort > 0 {
+	if r.ModelMeshService[n.GetName()].RESTPort > 0 {
 		s.Spec.Ports = append(s.Spec.Ports, corev1.ServicePort{
 			Name:       "http",
-			Port:       int32(r.ModelMeshService.RESTPort),
+			Port:       int32(r.ModelMeshService[n.GetName()].RESTPort),
 			TargetPort: intstr.FromString("http"),
 		})
-	}
-
-	err = controllerutil.SetControllerReference(d, s, r.Scheme)
-	if err != nil {
-		return fmt.Errorf("Could not set owner reference: %w", err), false
 	}
 
 	if !exists {
 		if headless {
 			s.Spec.ClusterIP = "None"
 		}
-		r.ModelMeshService.Disconnect()
+		r.ModelMeshService[n.GetName()].Disconnect()
 		err = r.Create(ctx, s)
 		if err != nil {
 			r.Log.Error(err, "Could not create service")
 		}
 	} else {
-		err = r.ModelMeshService.Connect()
+		err = r.ModelMeshService[n.GetName()].Connect()
 		if err != nil {
 			r.Log.Error(err, "Error establishing model-mesh gRPC conn")
 		}
@@ -262,15 +259,15 @@ func (r *ServiceReconciler) ReconcileServiceMonitor(ctx context.Context, metrics
 	r.Log.V(1).Info("Applying Service Monitor")
 
 	sm := &monitoringv1.ServiceMonitor{}
-	serviceName := r.ModelMeshService.Name
+	serviceName := r.ModelMeshService[owner.GetName()].Name
 
-	err := r.Client.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: r.ControllerDeployment.Namespace}, sm)
+	err := r.Client.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: owner.GetName()}, sm)
 	exists := true
 	if k8serr.IsNotFound(err) {
 		// Create the ServiceMonitor if not found
 		exists = false
 		sm.Name = serviceMonitorName
-		sm.Namespace = r.ControllerDeployment.Namespace
+		sm.Namespace = owner.GetName()
 	} else if err != nil {
 		r.Log.Error(err, "Unable to access service monitor", "serviceMonitorName", serviceMonitorName)
 		return nil, false
@@ -325,17 +322,9 @@ func (r *ServiceReconciler) ReconcileServiceMonitor(ctx context.Context, metrics
 }
 
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	filter := func(meta metav1.Object) bool {
-		return meta.GetName() == r.ControllerDeployment.Name &&
-			meta.GetNamespace() == r.ControllerDeployment.Namespace
-	}
 	builder := ctrl.NewControllerManagedBy(mgr).
 		Named("ServiceReconciler").
-		For(&appsv1.Deployment{}, builder.WithPredicates(predicate.Funcs{
-			CreateFunc: func(event event.CreateEvent) bool { return filter(event.Object) },
-			UpdateFunc: func(event event.UpdateEvent) bool { return filter(event.ObjectNew) },
-			DeleteFunc: func(event event.DeleteEvent) bool { return false },
-		})).
+		For(&corev1.Namespace{}).
 		Owns(&corev1.Service{}).
 		Watches(&source.Kind{Type: &corev1.ConfigMap{}},
 			ConfigWatchHandler(r.ConfigMapName, func() []reconcile.Request {
