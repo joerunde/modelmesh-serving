@@ -111,29 +111,35 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	err := r.Client.Get(ctx, req.NamespacedName, n)
 
 	// check for label and if its not there delete owned service else call the stuff below
-	if (len(changedServices) > 0 || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
-		err2, requeue := r.applyService(ctx, n)
-		if err2 != nil || requeue {
-			//TODO probably shorter requeue time (immediate?) for service recreate case
-			return RequeueResult, err2
+	if n.Labels["modelmesh-enabled"] == "true" {
+		r.Log.Info("namespace has modelmesh-enabled = true")
+		if (len(changedServices) > 0 || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
+			err2, requeue := r.applyService(ctx, n)
+			if err2 != nil || requeue {
+				//TODO probably shorter requeue time (immediate?) for service recreate case
+				return RequeueResult, err2
+			}
 		}
-	}
 
-	for i := 0; i < len(changedServices); i++ {
-		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[changedServices[i]].Name)
-		if err != nil {
-			return RequeueResult, err
+		for i := 0; i < len(changedServices); i++ {
+			err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[changedServices[i]].Name)
+			if err != nil {
+				return RequeueResult, err
+			}
 		}
-	}
 
-	// Service Monitor reconciliation should be called towards the end of the Service Reconcile method so that
-	// errors returned from here should not impact any other functions.
-	if r.ServiceMonitorCRDExists {
-		// Reconcile Service Monitor if the ServiceMonitor CRD exists
-		err, requeue := r.ReconcileServiceMonitor(ctx, cfg.Metrics, n)
-		if err != nil || requeue {
-			return RequeueResult, err
+		// Service Monitor reconciliation should be called towards the end of the Service Reconcile method so that
+		// errors returned from here should not impact any other functions.
+		if r.ServiceMonitorCRDExists {
+			// Reconcile Service Monitor if the ServiceMonitor CRD exists
+			err, requeue := r.ReconcileServiceMonitor(ctx, cfg.Metrics, n)
+			if err != nil || requeue {
+				return RequeueResult, err
+			}
 		}
+
+	} else {
+		r.Log.Info("namespace has modelmesh-enabled = false or no such label")
 	}
 	return ctrl.Result{}, nil
 }
