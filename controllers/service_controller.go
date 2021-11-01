@@ -88,12 +88,18 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	n := &corev1.Namespace{}
 	err := r.Client.Get(ctx, req.NamespacedName, n)
 
+        r.Log.Info("in servicecontroller Reconcile 2.1 ===========", " r.ModelMeshService[ns]",  len(r.ModelMeshService))
+        for k, v := range r.ModelMeshService {
+                r.Log.Info("in servicecontroller Reconcile 2.3 ===========", "key", k)
+                r.Log.Info("in servicecontroller Reconcile 2.3 ===========", "value", v)
+        }
+
 	// check for label and if its not there delete owned service else call the stuff below
 	if n.Labels["modelmesh-enabled"] == "true" {
 		r.Log.Info("namespace has modelmesh-enabled = true ===========")
-		if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() {
+		if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() || r.ModelMeshService[req.NamespacedName.Name] == nil {
 			r.Log.Info("in servicecontroller Reconcile 3 ===========", "cfg.InferenceServiceName", cfg.InferenceServiceName)
-			tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName, req.NamespacedName.Namespace)
+			tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName, req.NamespacedName.Name)
 			if err != nil {
 				return RequeueResult, err
 			}
@@ -106,7 +112,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 
 			// check for one in map
-			if mmSvc, ok := r.ModelMeshService[req.NamespacedName.Namespace]; ok {
+			if mmSvc, ok := r.ModelMeshService[req.NamespacedName.Name]; ok {
 				// change if needed
 				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "req.NamespacedName", req.NamespacedName)
 				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "mmSvc", mmSvc)
@@ -121,8 +127,12 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				changed = mmSvc.UpdateConfig(
 					cfg.InferenceServiceName, cfg.InferenceServicePort,
 					cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
+				r.ModelMeshService[req.NamespacedName.Name] = mmSvc
 			}
 		}
+		r.Log.Info("in servicecontroller Reconcile 5 ===========", " r.ModelMeshService[ns]",  len(r.ModelMeshService))
+                r.Log.Info("in servicecontroller Reconcile 5 ===========", " r.ModelMeshService[ns]",  r.ModelMeshService[req.NamespacedName.Name])
+		r.Log.Info("in servicecontroller Reconcile 5 ===========", " r.ModelMeshService[ns]",  r.ModelMeshService[req.NamespacedName.Name].Name)
 
 		if (changed || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
 			err2, requeue := r.applyService(ctx, n)
@@ -132,7 +142,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
-		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[req.NamespacedName.Namespace].Name)
+		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[req.NamespacedName.Name].Name)
 		if err != nil {
 			return RequeueResult, err
 		}
@@ -149,6 +159,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	} else {
 		r.Log.Info("namespace has modelmesh-enabled = false or no such label =============")
+		// remove service if it is there
 	}
 	return ctrl.Result{}, nil
 }
@@ -189,6 +200,14 @@ func (r *ServiceReconciler) tlsConfigFromSecret(ctx context.Context, secretName 
 
 func (r *ServiceReconciler) applyService(ctx context.Context, n *corev1.Namespace) (error, bool) {
 	s := &corev1.Service{}
+        r.Log.Info("in servicecontroller applyService 1 ===========", " r.ModelMeshService[ns]",  len(r.ModelMeshService))
+        r.Log.Info("in servicecontroller applyService 2 ===========", " n.GetName()",  n.GetName())
+        r.Log.Info("in servicecontroller applyService 3 ===========", " r.ModelMeshService[n.GetName()]",  r.ModelMeshService[n.GetName()])
+	for k, v := range r.ModelMeshService {
+        	r.Log.Info("in servicecontroller applyService 3 ===========", "key", k)
+        	r.Log.Info("in servicecontroller applyService 3 ===========", "value", v)
+	}
+
 	serviceName := r.ModelMeshService[n.GetName()].Name
 
 	exists := true
