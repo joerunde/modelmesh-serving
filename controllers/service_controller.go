@@ -79,11 +79,14 @@ type ServiceReconciler struct {
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.Log.V(1).Info("Service reconciler called")
+	r.Log.Info("in servicecontroller Reconcile 1 ===========", "req.NamespacedName", req.NamespacedName)
+	r.Log.Info("in servicecontroller Reconcile 2 ===========", "r.ConfigMapName", r.ConfigMapName)
 
 	cfg := r.ConfigProvider.GetConfig()
 	var changed bool
 	changedServices := []string{}
 	if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() {
+		r.Log.Info("in servicecontroller Reconcile 3 ===========", "cfg.InferenceServiceName", cfg.InferenceServiceName)
 		tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName, req.NamespacedName.Namespace)
 		if err != nil {
 			return RequeueResult, err
@@ -112,7 +115,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// check for label and if its not there delete owned service else call the stuff below
 	if n.Labels["modelmesh-enabled"] == "true" {
-		r.Log.Info("namespace has modelmesh-enabled = true")
+		r.Log.Info("namespace has modelmesh-enabled = true ===========")
 		if (len(changedServices) > 0 || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
 			err2, requeue := r.applyService(ctx, n)
 			if err2 != nil || requeue {
@@ -139,7 +142,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 
 	} else {
-		r.Log.Info("namespace has modelmesh-enabled = false or no such label")
+		r.Log.Info("namespace has modelmesh-enabled = false or no such label =============")
 	}
 	return ctrl.Result{}, nil
 }
