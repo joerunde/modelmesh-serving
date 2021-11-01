@@ -84,31 +84,6 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	cfg := r.ConfigProvider.GetConfig()
 	var changed bool
-	changedServices := []string{}
-	if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() {
-		r.Log.Info("in servicecontroller Reconcile 3 ===========", "cfg.InferenceServiceName", cfg.InferenceServiceName)
-		tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName, req.NamespacedName.Namespace)
-		if err != nil {
-			return RequeueResult, err
-		}
-		var metricsPort, restProxyPort uint16 = 0, 0
-		if cfg.Metrics.Enabled {
-			metricsPort = cfg.Metrics.Port
-		}
-		if cfg.RESTProxy.Enabled {
-			restProxyPort = cfg.RESTProxy.Port
-		}
-
-		// check for each in map
-		for namespace, mmSvc := range r.ModelMeshService {
-			changed = mmSvc.UpdateConfig(
-				cfg.InferenceServiceName, cfg.InferenceServicePort,
-				cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
-			if changed {
-				changedServices = append(changedServices, namespace)
-			}
-		}
-	}
 
 	n := &corev1.Namespace{}
 	err := r.Client.Get(ctx, req.NamespacedName, n)
@@ -116,7 +91,36 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// check for label and if its not there delete owned service else call the stuff below
 	if n.Labels["modelmesh-enabled"] == "true" {
 		r.Log.Info("namespace has modelmesh-enabled = true ===========")
-		if (len(changedServices) > 0 || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
+		if req.NamespacedName == r.ConfigMapName || !r.ModelEventStream.IsWatching() {
+			r.Log.Info("in servicecontroller Reconcile 3 ===========", "cfg.InferenceServiceName", cfg.InferenceServiceName)
+			tlsConfig, err := r.tlsConfigFromSecret(ctx, cfg.TLS.SecretName, req.NamespacedName.Namespace)
+			if err != nil {
+				return RequeueResult, err
+			}
+			var metricsPort, restProxyPort uint16 = 0, 0
+			if cfg.Metrics.Enabled {
+				metricsPort = cfg.Metrics.Port
+			}
+			if cfg.RESTProxy.Enabled {
+				restProxyPort = cfg.RESTProxy.Port
+			}
+
+			// check for one in map
+			if mmSvc, ok := r.ModelMeshService[req.NamespacedName.Namespace]; ok {
+				// change if needed
+				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "req.NamespacedName", req.NamespacedName)
+				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "mmSvc", mmSvc)
+				changed = mmSvc.UpdateConfig(
+					cfg.InferenceServiceName, cfg.InferenceServicePort,
+					cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
+			} else {
+				// initialize one
+				r.Log.Info("in servicecontroller Reconcile 4 not there ===========", "req.NamespacedName", req.NamespacedName)
+				r.Log.Info("in servicecontroller Reconcile 4 not there ===========", "mmSvc", mmSvc)
+			}
+		}
+
+		if (changed || req.NamespacedName != r.ConfigMapName) && req.Name != serviceMonitorName {
 			err2, requeue := r.applyService(ctx, n)
 			if err2 != nil || requeue {
 				//TODO probably shorter requeue time (immediate?) for service recreate case
@@ -124,11 +128,9 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
-		for i := 0; i < len(changedServices); i++ {
-			err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[changedServices[i]].Name)
-			if err != nil {
-				return RequeueResult, err
-			}
+		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[req.NamespacedName.Namespace].Name)
+		if err != nil {
+			return RequeueResult, err
 		}
 
 		// Service Monitor reconciliation should be called towards the end of the Service Reconcile method so that
