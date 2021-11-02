@@ -117,9 +117,16 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	updateStatus := false
 	mmc := pr.MMService[nname.Namespace].MMClient()
 	log.Info("in predictor ReconcilePredictor 3 ========", "len(pr.MMService)", len(pr.MMService))
+	log.Info("in predictor ReconcilePredictor 3 ========", "mmc", mmc)
+	for k, v := range pr.MMService {
+		pr.Log.Info("in ReconcilePredictor 3 ===========", "key", k)
+		pr.Log.Info("in ReconcilePredictor 3 ===========", "value", v)
+	}
+
 	var finalErr error
 	if predictor.Spec.Storage != nil && predictor.Spec.Storage.S3 == nil {
 		log.Info("Only S3 Storage currently supported", "Storage", predictor.Spec.Storage)
+		log.Info("in predictor ReconcilePredictor 4 ========", "mmc", mmc)
 		if mmc != nil {
 			// Don't update invalid spec but still check vmodel status to sync the existing model states
 			vModelState, err := mmc.GetVModelStatus(ctx, &mmeshapi.GetVModelStatusRequest{
@@ -151,7 +158,7 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	} else if mmc != nil {
 		// This determines whether we should trigger an explicit load of the model
 		// as part of the update, e.g. if the predictor is new or transitioning
-		log.Info("in predictor ReconcilePredictor 4 ========")
+		log.Info("in predictor ReconcilePredictor 4.1 ========")
 		loadNow := predictor.DeletionTimestamp == nil &&
 			(status.ActiveModelState == api.Pending ||
 				status.ActiveModelState == api.FailedToLoad ||
