@@ -283,6 +283,11 @@ func (r *ServiceReconciler) applyService(ctx context.Context, n *corev1.Namespac
 		})
 	}
 
+	err = controllerutil.SetControllerReference(n, s, r.Scheme)
+	if err != nil {
+		return fmt.Errorf("Could not set owner reference: %w", err), false
+	}
+
 	if !exists {
 		if headless {
 			s.Spec.ClusterIP = "None"
