@@ -117,6 +117,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				// Change if needed
 				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "req.NamespacedName", req.NamespacedName)
 				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "mmSvc", mmSvc)
+				r.Log.Info("in servicecontroller Reconcile 4 found it ===========", "cfg", cfg)
 				changed = mmSvc.UpdateConfig(
 					cfg.InferenceServiceName, cfg.InferenceServicePort,
 					cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
@@ -124,6 +125,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				// initialize one
 				r.Log.Info("in servicecontroller Reconcile 4 not there ===========", "req.NamespacedName", req.NamespacedName)
 				r.Log.Info("in servicecontroller Reconcile 4 not there ===========", "mmSvc", mmSvc)
+				r.Log.Info("in servicecontroller Reconcile 4 not there ===========", "cfg", cfg)
 				mmSvc = mmesh.NewMMService()
 				changed = mmSvc.UpdateConfig(
 					cfg.InferenceServiceName, cfg.InferenceServicePort,
