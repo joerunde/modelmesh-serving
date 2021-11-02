@@ -84,7 +84,7 @@ func (mes *ModelMeshEventStream) IsWatching() bool {
 	return mes.cancelWatch != nil
 }
 
-func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdSecretName string, serviceName string) error {
+func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdSecretName string, serviceName string, ns string) error {
 	if serviceName == "" {
 		return fmt.Errorf("serviceName must not be an empty string")
 	}
@@ -122,7 +122,7 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 		mes.watchedEtcdSecret = etcdSecretName
 	}
 
-	servicePrefix := fmt.Sprintf("%s/%s/%s", mes.etcdRootPrefix, modelmesh.ModelMeshEtcdPrefix, serviceName)
+	servicePrefix := fmt.Sprintf("%s/%s/%s/%s", mes.etcdRootPrefix, modelmesh.ModelMeshEtcdPrefix, serviceName, ns)
 	mes.logger.Info("Initialize Model Event Stream", "servicePrefix", servicePrefix)
 
 	watchCtx, mes.cancelWatch = context.WithCancel(mes.ctx)

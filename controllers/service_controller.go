@@ -143,7 +143,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
-		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[req.NamespacedName.Name].Name)
+		err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), r.ModelMeshService[req.NamespacedName.Name].Name, req.NamespacedName.Name)
 		if err != nil {
 			return RequeueResult, err
 		}
