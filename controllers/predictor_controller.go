@@ -105,7 +105,7 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	if (predictor == nil && err == nil) || errors.IsNotFound(err) {
 		return pr.handlePredictorNotFound(ctx, nname, sourceId)
 	}
-	log.Info("in predictor ReconcilePredictor 2 ========")
+	log.Info("in predictor ReconcilePredictor 2 ========", "nname.Namespace", nname.Namespace)
 
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to fetch CR from kubebuilder cache for predictor %s: %w",
@@ -116,7 +116,7 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	waitingBefore := status.WaitingForRuntime()
 	updateStatus := false
 	mmc := pr.MMService[nname.Namespace].MMClient()
-	log.Info("in predictor ReconcilePredictor 3 ========")
+	log.Info("in predictor ReconcilePredictor 3 ========", "len(pr.MMService)", len(pr.MMService))
 	var finalErr error
 	if predictor.Spec.Storage != nil && predictor.Spec.Storage.S3 == nil {
 		log.Info("Only S3 Storage currently supported", "Storage", predictor.Spec.Storage)

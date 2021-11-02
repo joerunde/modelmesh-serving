@@ -158,7 +158,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	} else {
 		r.Log.Info("namespace has modelmesh-enabled = false or no such label =============")
-		// Delete service if exists in the namespace
+		// remove service if it is there
 		s := &corev1.Service{}
 		if r.ModelMeshService[n.GetName()] != nil {
 			serviceName := r.ModelMeshService[n.GetName()].Name
