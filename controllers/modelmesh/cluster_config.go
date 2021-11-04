@@ -47,7 +47,7 @@ type ClusterConfig struct {
 	Scheme    *runtime.Scheme
 }
 
-func (cc ClusterConfig) Apply(ctx context.Context, owner metav1.Object, cl client.Client) error {
+func (cc ClusterConfig) Apply(ctx context.Context, cl client.Client) error {
 	commonLabelValue := "modelmesh-controller"
 
 	m := &corev1.ConfigMap{

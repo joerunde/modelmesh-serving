@@ -62,8 +62,8 @@ type ServingRuntimeReconciler struct {
 	Scheme              *runtime.Scheme
 	ConfigProvider      *ConfigProvider
 	ConfigMapName       types.NamespacedName
-	DeploymentName      string
-	DeploymentNamespace string
+	ControllerName      string
+	ControllerNamespace string
 	// store some information about current runtimes for making scaling decisions
 	runtimeInfoMap      map[types.NamespacedName]*runtimeInfo
 	runtimeInfoMapMutex sync.Mutex
@@ -90,6 +90,8 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	log := r.Log.WithValues("servingruntime", req.NamespacedName)
 	log.V(1).Info("ServingRuntime reconciler called")
 
+	//TODO make sure the namespace has serving enabled
+
 	// Reconcile the model mesh cluster config map
 	runtimes := &api.ServingRuntimeList{}
 	err := r.Client.List(ctx, runtimes)
@@ -97,14 +99,14 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return RequeueResult, err
 	}
 
-	d := &appsv1.Deployment{}
-	err = r.Client.Get(ctx, types.NamespacedName{
-		Name:      r.DeploymentName,
-		Namespace: r.DeploymentNamespace,
-	}, d)
-	if err != nil {
-		return RequeueResult, fmt.Errorf("Could not get the controller deployment: %w", err)
-	}
+	//d := &appsv1.Deployment{}
+	//err = r.Client.Get(ctx, types.NamespacedName{
+	//	Name:      r.ControllerName,
+	//	Namespace: r.ControllerNamespace,
+	//}, d)
+	//if err != nil {
+	//	return RequeueResult, fmt.Errorf("Could not get the controller deployment: %w", err)
+	//}
 
 	cc := modelmesh.ClusterConfig{
 		Runtimes:  runtimes,
@@ -112,7 +114,8 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		Scheme:    r.Scheme,
 	}
 
-	if err = cc.Apply(ctx, d, r.Client); err != nil {
+	//TODO OWNERSHIP FOR tc-config configmap
+	if err = cc.Apply(ctx, r.Client); err != nil {
 		return RequeueResult, fmt.Errorf("Could not apply the modelmesh type-constraints configmap: %w", err)
 	}
 
@@ -133,10 +136,9 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// If invalid ServerType is provided in rt.Spec or if this value doesn't match with that of the specified container, delete the deployment
+	// Check that ServerType is provided in rt.Spec and that this value matches that of the specified container
 	if err = validateServingRuntimeSpec(rt); err != nil {
-		werr := fmt.Errorf("Invalid ServingRuntime Spec: %w", err)
-		return ctrl.Result{}, werr
+		return ctrl.Result{}, fmt.Errorf("Invalid ServingRuntime Spec: %w", err)
 	}
 
 	// construct the deployment
@@ -175,15 +177,13 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// if the runtime is disabled, delete the deployment
 	if rt.Disabled() {
 		log.Info("Deployment is disabled for this runtime")
-		err = mmDeployment.Delete(ctx, r.Client)
-		if err != nil {
-			werr := fmt.Errorf("Could not delete the model mesh deployment: %w", err)
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, werr
+		if err = mmDeployment.Delete(ctx, r.Client); err != nil {
+			return ctrl.Result{}, fmt.Errorf("Could not delete the model mesh deployment: %w", err)
 		}
 		return ctrl.Result{}, nil
 	}
 
-	replicas, requeueDuration, err := r.determineReplicasAndRequeueDuration(ctx, log, config, rt, req.Namespace)
+	replicas, requeueDuration, err := r.determineReplicasAndRequeueDuration(ctx, log, config, rt)
 	if err != nil {
 		werr := fmt.Errorf("Could not determine replicas: %w", err)
 		return RequeueResult, werr
@@ -221,7 +221,9 @@ func validateServingRuntimeSpec(rt *api.ServingRuntime) error {
 	return fmt.Errorf("Must include runtime Container with name %s", st)
 }
 
-func (r *ServingRuntimeReconciler) determineReplicasAndRequeueDuration(ctx context.Context, log logr.Logger, config *Config, rt *api.ServingRuntime, namespace string) (uint16, time.Duration, error) {
+func (r *ServingRuntimeReconciler) determineReplicasAndRequeueDuration(ctx context.Context, log logr.Logger,
+	config *Config, rt *api.ServingRuntime) (uint16, time.Duration, error) {
+
 	var err error
 	const scaledToZero = uint16(0)
 	scaledUp := r.determineReplicas(rt)
@@ -230,8 +232,7 @@ func (r *ServingRuntimeReconciler) determineReplicasAndRequeueDuration(ctx conte
 	}
 
 	// check if the runtime has predictors before locking the mutex
-	hasPredictors, err := r.runtimeHasPredictors(ctx, rt, namespace)
-
+	hasPredictors, err := r.runtimeHasPredictors(ctx, rt)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -303,13 +304,13 @@ func (r *ServingRuntimeReconciler) determineReplicas(rt *api.ServingRuntime) uin
 }
 
 // runtimeHasPredictors returns true if the runtime supports an existing Predictor
-func (r *ServingRuntimeReconciler) runtimeHasPredictors(ctx context.Context, rt *api.ServingRuntime, namespace string) (bool, error) {
+func (r *ServingRuntimeReconciler) runtimeHasPredictors(ctx context.Context, rt *api.ServingRuntime) (bool, error) {
 	f := func(p *api.Predictor) bool {
 		return runtimeSupportsPredictor(rt, p)
 	}
 
 	for _, pr := range r.RegistryMap {
-		if found, err := pr.Find(ctx, namespace, f); found || err != nil {
+		if found, err := pr.Find(ctx, rt.GetNamespace(), f); found || err != nil {
 			return found, err
 		}
 	}
@@ -364,7 +365,9 @@ func (r *ServingRuntimeReconciler) SetupWithManager(mgr ctrl.Manager,
 				list := &api.ServingRuntimeList{}
 				requests := make([]reconcile.Request, 0, 4)
 				if err2 := r.Client.List(context.TODO(), list); err2 == nil {
-					for _, rt := range list.Items {
+					for i := range list.Items {
+						rt := &list.Items[i]
+						//TODO filter/optimize here later probably
 						requests = append(requests, reconcile.Request{
 							NamespacedName: types.NamespacedName{Name: rt.Name, Namespace: rt.Namespace},
 						})
