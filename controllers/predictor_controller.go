@@ -57,7 +57,7 @@ const (
 type PredictorReconciler struct {
 	client.Client
 	Log       logr.Logger
-	MMService map[string]*mmesh.MMService
+	MMService map[string]*mmesh.MMService //TODO synchronize .. sync.Map
 
 	RegistryLookup map[string]predictor_source.PredictorRegistry
 }
@@ -94,6 +94,14 @@ func (pr *PredictorReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return pr.ReconcilePredictor(ctx, nname, source, registry)
 }
 
+func (pr *PredictorReconciler) getMMClient(namespace string) mmeshapi.ModelMeshClient {
+	mms := pr.MMService[namespace]
+	if mms == nil {
+		return nil
+	}
+	return mms.MMClient()
+}
+
 func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname types.NamespacedName,
 	sourceId string, registry predictor_source.PredictorRegistry) (ctrl.Result, error) {
 	resourceType := registry.GetSourceName()
@@ -115,7 +123,7 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	status := &predictor.Status
 	waitingBefore := status.WaitingForRuntime()
 	updateStatus := false
-	mmc := pr.MMService[nname.Namespace].MMClient()
+	mmc := pr.getMMClient(nname.Namespace)
 	log.Info("in predictor ReconcilePredictor 3 ========", "len(pr.MMService)", len(pr.MMService))
 	log.Info("in predictor ReconcilePredictor 3 ========", "mmc", mmc)
 	for k, v := range pr.MMService {
@@ -270,7 +278,7 @@ var transitionStatusMap = map[mmeshapi.VModelStatusInfo_VModelStatus]api.Transit
 
 func (pr *PredictorReconciler) handlePredictorNotFound(ctx context.Context,
 	name types.NamespacedName, sourceId string) (ctrl.Result, error) {
-	mmc := pr.MMService[name.Namespace].MMClient()
+	mmc := pr.getMMClient(name.Namespace)
 	if mmc == nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}

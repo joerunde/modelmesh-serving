@@ -33,6 +33,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+
 	"github.com/kserve/modelmesh-serving/controllers/modelmesh"
 
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -86,7 +87,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.Client.Get(ctx, req.NamespacedName, n); err != nil {
 		return ctrl.Result{}, err
 	}
-	if !modelMeshEnabled(n) {
+	if !r.modelMeshEnabled(n) {
 		sl := &corev1.ServiceList{}
 		err := r.List(ctx, sl, client.HasLabels{"modelmesh-service"}, client.InNamespace(namespace))
 		if err == nil {
@@ -126,7 +127,6 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		cfg.InferenceServiceName, cfg.InferenceServicePort,
 		cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
 
-
 	if changed && req.Name != serviceMonitorName { //TODO TBD
 		err2, requeue := r.applyService(ctx, mms, n)
 		if err2 != nil || requeue {
@@ -157,8 +157,6 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	return ctrl.Result{}, nil
 }
-
-
 
 func (r *ServiceReconciler) tlsConfigFromSecret(ctx context.Context, secretName string, namespace string) (*tls.Config, error) {
 	if secretName == "" {
@@ -207,7 +205,7 @@ func (r *ServiceReconciler) applyService(ctx context.Context, mms *mmesh.MMServi
 	namespace := n.GetName()
 	serviceName := mms.Name
 	exists := false
-	
+
 	sl := &corev1.ServiceList{}
 	if err := r.List(ctx, sl, client.HasLabels{"modelmesh-service"}, client.InNamespace(namespace)); err != nil {
 		return err, false
@@ -226,9 +224,8 @@ func (r *ServiceReconciler) applyService(ctx context.Context, mms *mmesh.MMServi
 	if !exists {
 		s = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: serviceName,
+				Name:      serviceName,
 				Namespace: namespace,
-				Labels: map[string]string{"modelmesh-service":"true"}, //TODO
 			},
 		}
 	}
@@ -280,13 +277,13 @@ func (r *ServiceReconciler) applyService(ctx context.Context, mms *mmesh.MMServi
 		return fmt.Errorf("Could not set owner reference: %w", err), false
 	}
 
-    var err error
+	var err error
 	if !exists {
 		if headless {
 			s.Spec.ClusterIP = "None"
 		}
 		mms.Disconnect()
-		
+
 		if err = r.Create(ctx, s); err != nil {
 			r.Log.Error(err, "Could not create service")
 		}
@@ -371,14 +368,14 @@ func (r *ServiceReconciler) ReconcileServiceMonitor(ctx context.Context, metrics
 	return err, false
 }
 
-func modelMeshEnabled(n *corev1.Namespace) bool {
+func (r *ServiceReconciler) modelMeshEnabled(n *corev1.Namespace) bool {
 	if n == nil {
 		return false
 	}
 	if v, ok := n.Labels["modelmesh-enabled"]; ok {
 		return v == "true"
 	} else {
-		return n.Name == "controllernamespace" //TODO
+		return n.Name == r.ControllerDeployment.Namespace
 	}
 }
 
@@ -396,7 +393,7 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 				requests := make([]reconcile.Request, 0, len(list.Items))
 				for i := range list.Items {
-					if n := &list.Items[i]; modelMeshEnabled(n) {
+					if n := &list.Items[i]; r.modelMeshEnabled(n) {
 						requests = append(requests, reconcile.Request{
 							NamespacedName: types.NamespacedName{Name: n.Name, Namespace: n.Namespace},
 						})

@@ -27,8 +27,8 @@ import (
 
 // Encapsulates ModelMesh gRPC service
 type MMService struct {
-	Log logr.Logger
-	namespace          string // doesn't change
+	Log       logr.Logger
+	namespace string // doesn't change
 
 	Name               string
 	Port               uint16

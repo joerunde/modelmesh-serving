@@ -38,15 +38,15 @@ type ModelMeshEventStream struct {
 	controllerNamespace string
 	k8sClient           k8sClient.Client
 
-	secretName          string
-	etcdClient          *etcd3.Client
-	etcdRootPrefix      string
+	secretName     string
+	etcdClient     *etcd3.Client
+	etcdRootPrefix string
 
 	//TODO synchronize?
-	watchedServices     map[string]*namespaceWatch
+	watchedServices map[string]*namespaceWatch
 
-	MMEvents    chan event.GenericEvent
-	ctx         context.Context
+	MMEvents chan event.GenericEvent
+	ctx      context.Context
 
 	logger logr.Logger
 }
@@ -81,7 +81,7 @@ func NewModelEventStream(logger logr.Logger, k8sClient k8sClient.Client,
 	this.etcdRootPrefix = ""
 
 	//TODO removal part ... when service is deleted
-	this.watchedServices = map[string]*namespaceWatch{namespace:{}}
+	this.watchedServices = map[string]*namespaceWatch{namespace: {}}
 
 	this.MMEvents = make(chan event.GenericEvent, 512) //TODO buffer size TBD
 
@@ -119,7 +119,7 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 		// etcd config secret changed
 		mes.logger.V(1).Info("Etcd config secret changed. Creating a new etcd client and restarting watchers.",
 			"oldSecretName", mes.secretName, "newSecretName", etcdSecretName)
-		for _,w := range mes.watchedServices {
+		for _, w := range mes.watchedServices {
 			w.cancelWatch()
 		}
 		if mes.etcdClient != nil {
@@ -133,7 +133,7 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 		}
 		mes.secretName = etcdSecretName
 
-		for n,w := range mes.watchedServices {
+		for n, w := range mes.watchedServices {
 			sn := w.watchedServiceName
 			if n == namespace {
 				sn = serviceName
@@ -175,7 +175,7 @@ func (mes *ModelMeshEventStream) refreshWatches(nw *namespaceWatch, namespace, s
 					namespace = fmt.Sprintf("%s_%s", owner, namespace)
 				}
 				logger.V(1).Info("ModelMesh VModel Event",
-				"vModelId", key, "owner", owner, "event", eventType)
+					"vModelId", key, "owner", owner, "event", eventType)
 				mes.MMEvents <- event.GenericEvent{Object: &v1.PartialObjectMetadata{
 					ObjectMeta: v1.ObjectMeta{Name: key, Namespace: namespace},
 				}}
@@ -208,11 +208,10 @@ func (mes *ModelMeshEventStream) refreshWatches(nw *namespaceWatch, namespace, s
 					"modelId", key, "eventType", eventType)
 			}
 		})
-	
+
 	// wait until just before returning to set this so we know we didn't have any errors
 	nw.watchedServiceName = serviceName
 }
-
 
 func ownerIDFromVModelRecord(data []byte) (string, error) {
 	type record struct{ O string } // owner field is called "o"; ignore others
