@@ -221,7 +221,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	_, err = mmesh.InitGrpcResolver(ControllerNamespace, mgr)
+	_, err = mmesh.InitGrpcResolver(mgr)
 	if err != nil {
 		setupLog.Error(err, "Failed to Initialize Grpc Resolver, exit")
 		os.Exit(1)

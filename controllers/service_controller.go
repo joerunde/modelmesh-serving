@@ -123,11 +123,11 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if cfg.RESTProxy.Enabled {
 		restProxyPort = cfg.RESTProxy.Port
 	}
-	changed := mms.UpdateConfig(
+	mms.UpdateConfig(
 		cfg.InferenceServiceName, cfg.InferenceServicePort,
 		cfg.ModelMeshEndpoint, cfg.TLS.SecretName, tlsConfig, cfg.HeadlessService, metricsPort, restProxyPort)
 
-	if changed && req.Name != serviceMonitorName { //TODO TBD
+	if req.Name != serviceMonitorName { //TODO TBD
 		err2, requeue := r.applyService(ctx, mms, n)
 		if err2 != nil || requeue {
 			//TODO probably shorter requeue time (immediate?) for service recreate case
