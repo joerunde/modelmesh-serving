@@ -119,6 +119,11 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return RequeueResult, fmt.Errorf("Could not apply the modelmesh type-constraints configmap: %w", err)
 	}
 
+	//TODO(probably) here ... if not controller namespace then
+	//  read etcd secret from controller namespace, replace rootprefix with ns-specific one
+	//  and the create/update etcd secret (with same name) in _this_ namespace
+	//  and include an "ownership" label similar to the tc-config configmap
+
 	//reconcile this serving runtime
 	rt := &api.ServingRuntime{}
 	err = r.Client.Get(ctx, req.NamespacedName, rt)
@@ -330,18 +335,17 @@ func runtimeSupportsPredictor(rt *api.ServingRuntime, p *api.Predictor) bool {
 //
 // A predictor may be supported by multiple runtimes.
 func (r *ServingRuntimeReconciler) getRuntimesSupportingPredictor(ctx context.Context, p *api.Predictor) ([]types.NamespacedName, error) {
-	var err error
 
 	// list all runtimes
 	runtimes := &api.ServingRuntimeList{}
-	err = r.Client.List(ctx, runtimes, client.InNamespace(p.Namespace))
-	if err != nil {
+	if err := r.Client.List(ctx, runtimes, client.InNamespace(p.Namespace)); err != nil {
 		return nil, err
 	}
 
 	srnns := make([]types.NamespacedName, 0, len(runtimes.Items))
-	for _, rt := range runtimes.Items {
-		if runtimeSupportsPredictor(&rt, p) {
+	for i := range runtimes.Items {
+		rt := &runtimes.Items[i]
+		if runtimeSupportsPredictor(rt, p) {
 			srnn := types.NamespacedName{
 				Name:      rt.GetName(),
 				Namespace: p.Namespace,
@@ -363,7 +367,7 @@ func (r *ServingRuntimeReconciler) SetupWithManager(mgr ctrl.Manager,
 		Watches(&source.Kind{Type: &corev1.ConfigMap{}},
 			ConfigWatchHandler(r.ConfigMapName, func() []reconcile.Request {
 				list := &api.ServingRuntimeList{}
-				requests := make([]reconcile.Request, 0, 4)
+				requests := make([]reconcile.Request, 0, len(list.Items))
 				if err2 := r.Client.List(context.TODO(), list); err2 == nil {
 					for i := range list.Items {
 						rt := &list.Items[i]

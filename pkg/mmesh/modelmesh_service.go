@@ -28,6 +28,7 @@ import (
 // Encapsulates ModelMesh gRPC service
 type MMService struct {
 	Log logr.Logger
+	Namespace          string // doesn't change
 
 	Name               string
 	Port               uint16
@@ -43,8 +44,12 @@ type MMService struct {
 	RESTPort    uint16
 }
 
-func NewMMService() *MMService {
-	return &MMService{Log: ctrl.Log.WithName("MMService")}
+func NewMMService(namespace string) *MMService {
+	return &MMService{Log: ctrl.Log.WithName("MMService"), Namespace: namespace}
+}
+
+func (mms *MMService) dnsName() string {
+	return fmt.Sprintf("%s.%s", mms.Name, mms.Namespace)
 }
 
 func (mms *MMService) UpdateConfig(name string, port uint16,
@@ -91,7 +96,7 @@ type mmClient struct {
 }
 
 func (mms *MMService) InferenceEndpoint() string {
-	return fmt.Sprintf("%s:%d", mms.Name, mms.Port)
+	return fmt.Sprintf("%s:%d", mms.dnsName(), mms.Port)
 }
 
 func (mms *MMService) InferenceRESTEndpoint() string {
@@ -102,7 +107,7 @@ func (mms *MMService) InferenceRESTEndpoint() string {
 	if mms.TLSConfig != nil {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, mms.Name, mms.RESTPort)
+	return fmt.Sprintf("%s://%s:%d", scheme, mms.dnsName(), mms.RESTPort)
 }
 
 func (mms *MMService) MMClient() mmeshapi.ModelMeshClient {
@@ -114,7 +119,7 @@ func (mms *MMService) MMClient() mmeshapi.ModelMeshClient {
 }
 
 func (mms *MMService) Connect() error {
-	mmc, err := newMmClient(mms.ManagementEndpoint, mms.TLSConfig, mms.Name, &mms.Log)
+	mmc, err := newMmClient(mms.ManagementEndpoint, mms.TLSConfig, mms.dnsName(), &mms.Log)
 	if err == nil {
 		mms.Disconnect()
 		mms.mmClient = mmc

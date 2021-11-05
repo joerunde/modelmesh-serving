@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/types"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -35,20 +36,32 @@ import (
 // streaming gRPC APIs from model-mesh for an "official" way to watch
 // for model events.
 type ModelMeshEventStream struct {
-	k8sClient          k8sClient.Client
-	etcdClient         *etcd3.Client
-	etcdRootPrefix     string
-	watchedServiceName string
-	watchedEtcdSecret  string
+	controllerNamespace string
+	k8sClient           k8sClient.Client
+
+	secretName          string
+	etcdClient          *etcd3.Client
+	etcdRootPrefix      string
+
+	//TODO synchronize?
+	watchedServices     map[string]*namespaceWatch
 
 	MMEvents    chan event.GenericEvent
 	ctx         context.Context
-	cancelWatch context.CancelFunc
 
 	logger logr.Logger
+}
 
-	//TODO multi-namespace TBD
-	namespace string
+type namespaceWatch struct {
+	watchedServiceName string
+	cancelFunc         context.CancelFunc
+}
+
+func (nw *namespaceWatch) cancelWatch() {
+	if nw.cancelFunc != nil {
+		nw.cancelFunc()
+		nw.cancelFunc = nil
+	}
 }
 
 const (
@@ -60,13 +73,16 @@ func NewModelEventStream(logger logr.Logger, k8sClient k8sClient.Client,
 	namespace string) (this *ModelMeshEventStream, err error) {
 	this = new(ModelMeshEventStream)
 	this.logger = logger
-	this.namespace = namespace
+	this.controllerNamespace = namespace
 
 	this.k8sClient = k8sClient
 
 	// These will get set on service reconciling
 	this.etcdClient = nil
 	this.etcdRootPrefix = ""
+
+	//TODO removal part ... when service is deleted
+	this.watchedServices = map[string]*namespaceWatch{namespace:{}}
 
 	this.MMEvents = make(chan event.GenericEvent, 512) //TODO buffer size TBD
 
@@ -80,11 +96,13 @@ func NewModelEventStream(logger logr.Logger, k8sClient k8sClient.Client,
 	return this, nil
 }
 
-func (mes *ModelMeshEventStream) IsWatching() bool {
-	return mes.cancelWatch != nil
-}
+//func (mes *ModelMeshEventStream) IsWatching() bool {
+//	return mes.cancelWatch != nil
+//}
 
-func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdSecretName string, serviceName string, ns string) error {
+func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdSecretName string,
+	serviceName, namespace string) error {
+
 	if serviceName == "" {
 		return fmt.Errorf("serviceName must not be an empty string")
 	}
@@ -92,40 +110,57 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 		return fmt.Errorf("etcdSecretName must not be an empty string")
 	}
 
-	serviceNameChanged := serviceName != mes.watchedServiceName
-	etcdSecretChanged := etcdSecretName != mes.watchedEtcdSecret
-
-	if !serviceNameChanged && !etcdSecretChanged {
-		// nothing changed, nothing to update
-		return nil
+	nw, ok := mes.watchedServices[namespace]
+	if !ok {
+		nw = &namespaceWatch{}
+		mes.watchedServices[namespace] = nw
 	}
 
-	var watchCtx context.Context
-	if mes.cancelWatch != nil {
-		mes.cancelWatch()
-		mes.cancelWatch = nil
-	}
-
-	if etcdSecretChanged {
+	if etcdSecretName != mes.secretName {
+		// etcd config secret changed
 		mes.logger.V(1).Info("Etcd config secret changed. Creating a new etcd client and restarting watchers.",
-			"oldSecretName", mes.watchedEtcdSecret, "newSecretName", etcdSecretName)
+			"oldSecretName", mes.secretName, "newSecretName", etcdSecretName)
+		for _,w := range mes.watchedServices {
+			w.cancelWatch()
+		}
 		if mes.etcdClient != nil {
 			err := mes.etcdClient.Close()
 			if err != nil {
 				mes.logger.Error(err, "Could not close existing etcd client")
 			}
 		}
-		err := mes.connectToEtcd(ctx, etcdSecretName)
-		if err != nil {
+		if err := mes.connectToEtcd(ctx, etcdSecretName); err != nil {
 			return fmt.Errorf("Could not create etcd client: %w", err)
 		}
-		mes.watchedEtcdSecret = etcdSecretName
+		mes.secretName = etcdSecretName
+
+		for n,w := range mes.watchedServices {
+			sn := w.watchedServiceName
+			if n == namespace {
+				sn = serviceName
+			}
+			mes.refreshWatches(w, n, sn)
+		}
+	} else if serviceName != nw.watchedServiceName {
+		// only service name changed
+		nw.cancelWatch()
+		mes.refreshWatches(nw, namespace, serviceName)
 	}
 
-	servicePrefix := fmt.Sprintf("%s/%s/%s/%s", mes.etcdRootPrefix, modelmesh.ModelMeshEtcdPrefix, serviceName, ns)
+	return nil
+}
+
+func (mes *ModelMeshEventStream) refreshWatches(nw *namespaceWatch, namespace, serviceName string) {
+	rp := mes.etcdRootPrefix
+	if namespace != mes.controllerNamespace {
+		rp = fmt.Sprintf("%s/mm_ns/%s", rp, namespace) //TODO double check root prefix restrictions
+	}
+
+	servicePrefix := fmt.Sprintf("%s/%s/%s", rp, modelmesh.ModelMeshEtcdPrefix, serviceName)
 	mes.logger.Info("Initialize Model Event Stream", "servicePrefix", servicePrefix)
 
-	watchCtx, mes.cancelWatch = context.WithCancel(mes.ctx)
+	var watchCtx context.Context
+	watchCtx, nw.cancelFunc = context.WithCancel(mes.ctx)
 
 	vmodelRegistryPrefix := fmt.Sprintf("%s/%s/", servicePrefix, VModelRegistryPrefix)
 	NewEtcdRangeWatcher(mes.logger, mes.etcdClient, vmodelRegistryPrefix).
@@ -135,11 +170,11 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 				return
 			}
 			if owner, err := ownerIDFromVModelRecord(value); err == nil {
-				namespace := mes.namespace
 				if owner != "" {
 					namespace = fmt.Sprintf("%s_%s", owner, namespace)
 				}
-				mes.logger.V(1).Info("ModelMesh VModel Event", "vModelId", key, "owner", owner, "event", eventType)
+				mes.logger.V(1).Info("ModelMesh VModel Event",
+				"vModelId", key, "owner", owner, "event", eventType)
 				mes.MMEvents <- event.GenericEvent{Object: &v1.PartialObjectMetadata{
 					ObjectMeta: v1.ObjectMeta{Name: key, Namespace: namespace},
 				}}
@@ -163,7 +198,7 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 						sourceId, predictorName := key[ownerIdx:hashIdx], key[:ownerIdx-2]
 						mes.MMEvents <- event.GenericEvent{Object: &v1.PartialObjectMetadata{ObjectMeta: v1.ObjectMeta{
 							Name:      predictorName,
-							Namespace: fmt.Sprintf("%s_%s", sourceId, mes.namespace),
+							Namespace: fmt.Sprintf("%s_%s", sourceId, namespace),
 						}}}
 						return
 					}
@@ -172,11 +207,11 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context, etcdS
 					"modelId", key, "eventType", eventType)
 			}
 		})
-
+	
 	// wait until just before returning to set this so we know we didn't have any errors
-	mes.watchedServiceName = serviceName
-	return nil
+	nw.watchedServiceName = serviceName
 }
+
 
 func ownerIDFromVModelRecord(data []byte) (string, error) {
 	type record struct{ O string } // owner field is called "o"; ignore others
@@ -189,8 +224,9 @@ func ownerIDFromVModelRecord(data []byte) (string, error) {
 
 func (mes *ModelMeshEventStream) connectToEtcd(ctx context.Context, secretName string) error {
 	etcdSecret := v12.Secret{}
-	err := mes.k8sClient.Get(ctx, k8sClient.ObjectKey{Name: secretName, Namespace: mes.namespace}, &etcdSecret)
-	if err != nil {
+	if err := mes.k8sClient.Get(ctx, types.NamespacedName{
+		Namespace: mes.controllerNamespace, Name: secretName,
+	}, &etcdSecret); err != nil {
 		return fmt.Errorf("Unable to access etcd secret with name '%s': %w", secretName, err)
 	}
 	etcdSecretJsonData, ok := etcdSecret.Data[modelmesh.EtcdSecretKey]
@@ -199,11 +235,11 @@ func (mes *ModelMeshEventStream) connectToEtcd(ctx context.Context, secretName s
 	}
 
 	var etcdConfig EtcdConfig
-	err = json.Unmarshal(etcdSecretJsonData, &etcdConfig)
-	if err != nil {
-		return fmt.Errorf("Failed to Parse Etcd Config Json: %w", err)
+	if err := json.Unmarshal(etcdSecretJsonData, &etcdConfig); err != nil {
+		return fmt.Errorf("failed to parse etcd config json: %w", err)
 	}
 
+	var err error
 	mes.etcdClient, err = CreateEtcdClient(etcdConfig, etcdSecret.Data, mes.logger)
 	if err != nil {
 		return fmt.Errorf("Failed to connect to Etcd: %w", err)

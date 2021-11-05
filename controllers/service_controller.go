@@ -106,7 +106,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	mms, ok := r.ModelMeshService[namespace]
 	if !ok {
-		mms = mmesh.NewMMService()
+		mms = mmesh.NewMMService(namespace)
 		r.ModelMeshService[namespace] = mms
 	}
 
@@ -135,8 +135,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), mms.Name, namespace)
-	if err != nil {
+	if err = r.ModelEventStream.UpdateWatchedService(ctx, cfg.GetEtcdSecretName(), mms.Name, namespace); err != nil {
 		return RequeueResult, err
 	}
 
