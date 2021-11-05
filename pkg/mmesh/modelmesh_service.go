@@ -28,7 +28,7 @@ import (
 // Encapsulates ModelMesh gRPC service
 type MMService struct {
 	Log logr.Logger
-	Namespace          string // doesn't change
+	namespace          string // doesn't change
 
 	Name               string
 	Port               uint16
@@ -45,11 +45,11 @@ type MMService struct {
 }
 
 func NewMMService(namespace string) *MMService {
-	return &MMService{Log: ctrl.Log.WithName("MMService"), Namespace: namespace}
+	return &MMService{Log: ctrl.Log.WithName("MMService"), namespace: namespace}
 }
 
 func (mms *MMService) dnsName() string {
-	return fmt.Sprintf("%s.%s", mms.Name, mms.Namespace)
+	return fmt.Sprintf("%s.%s", mms.Name, mms.namespace)
 }
 
 func (mms *MMService) UpdateConfig(name string, port uint16,

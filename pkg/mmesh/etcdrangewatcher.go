@@ -43,7 +43,7 @@ type EtcdConfig struct {
 	OverrideAuthority     string `json:"override_authority"`
 }
 
-// EtcdRangeWatcher A wrapper for Etcd Watch with common refreshWatches Watch Channel logic
+// EtcdRangeWatcher A wrapper for Etcd Watch with common refresh Watch Channel logic
 type EtcdRangeWatcher struct {
 	logger      logr.Logger
 	etcdClient  *etcd3.Client

@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -157,37 +156,39 @@ func (mes *ModelMeshEventStream) refreshWatches(nw *namespaceWatch, namespace, s
 	}
 
 	servicePrefix := fmt.Sprintf("%s/%s/%s", rp, modelmesh.ModelMeshEtcdPrefix, serviceName)
-	mes.logger.Info("Initialize Model Event Stream", "servicePrefix", servicePrefix)
+
+	logger := mes.logger.WithValues("namespace", namespace)
+	logger.Info("Initialize Model Event Stream", "servicePrefix", servicePrefix)
 
 	var watchCtx context.Context
 	watchCtx, nw.cancelFunc = context.WithCancel(mes.ctx)
 
 	vmodelRegistryPrefix := fmt.Sprintf("%s/%s/", servicePrefix, VModelRegistryPrefix)
-	NewEtcdRangeWatcher(mes.logger, mes.etcdClient, vmodelRegistryPrefix).
+	NewEtcdRangeWatcher(logger, mes.etcdClient, vmodelRegistryPrefix).
 		Start(watchCtx, false, func(eventType KeyEventType, key string, value []byte) {
 			if eventType != UPDATE && (eventType != DELETE || value == nil) {
-				mes.logger.V(1).Info("ModelMesh VModel Event", "vModelId", key, "event", eventType)
+				logger.V(1).Info("ModelMesh VModel Event", "vModelId", key, "event", eventType)
 				return
 			}
 			if owner, err := ownerIDFromVModelRecord(value); err == nil {
 				if owner != "" {
 					namespace = fmt.Sprintf("%s_%s", owner, namespace)
 				}
-				mes.logger.V(1).Info("ModelMesh VModel Event",
+				logger.V(1).Info("ModelMesh VModel Event",
 				"vModelId", key, "owner", owner, "event", eventType)
 				mes.MMEvents <- event.GenericEvent{Object: &v1.PartialObjectMetadata{
 					ObjectMeta: v1.ObjectMeta{Name: key, Namespace: namespace},
 				}}
 			} else {
-				mes.logger.Error(err, "Error parsing VModel record to determine owner, ignoring event",
+				logger.Error(err, "Error parsing VModel record to determine owner, ignoring event",
 					"vModelId", key, "event", eventType)
 			}
 		})
 
 	modelRegistryPrefix := fmt.Sprintf("%s/%s/", servicePrefix, ModelRegistryPrefix)
-	NewEtcdRangeWatcher(mes.logger, mes.etcdClient, modelRegistryPrefix).
+	NewEtcdRangeWatcher(logger, mes.etcdClient, modelRegistryPrefix).
 		Start(watchCtx, true, func(eventType KeyEventType, key string, _ []byte) {
-			mes.logger.V(1).Info("ModelMesh Model Event", "modelId", key, "event", eventType)
+			logger.V(1).Info("ModelMesh Model Event", "modelId", key, "event", eventType)
 			if eventType == UPDATE {
 				// key is like "vmodelname__owner-0123456789"
 				ownerIdx := strings.LastIndex(key, "__") + 2
@@ -203,7 +204,7 @@ func (mes *ModelMeshEventStream) refreshWatches(nw *namespaceWatch, namespace, s
 						return
 					}
 				}
-				mes.logger.Info("Ignoring event for unrecognized ModelMesh model",
+				logger.Info("Ignoring event for unrecognized ModelMesh model",
 					"modelId", key, "eventType", eventType)
 			}
 		})
@@ -224,9 +225,8 @@ func ownerIDFromVModelRecord(data []byte) (string, error) {
 
 func (mes *ModelMeshEventStream) connectToEtcd(ctx context.Context, secretName string) error {
 	etcdSecret := v12.Secret{}
-	if err := mes.k8sClient.Get(ctx, types.NamespacedName{
-		Namespace: mes.controllerNamespace, Name: secretName,
-	}, &etcdSecret); err != nil {
+	err := mes.k8sClient.Get(ctx, k8sClient.ObjectKey{Name: secretName, Namespace: mes.controllerNamespace}, &etcdSecret)
+	if err != nil {
 		return fmt.Errorf("Unable to access etcd secret with name '%s': %w", secretName, err)
 	}
 	etcdSecretJsonData, ok := etcdSecret.Data[modelmesh.EtcdSecretKey]
@@ -235,11 +235,10 @@ func (mes *ModelMeshEventStream) connectToEtcd(ctx context.Context, secretName s
 	}
 
 	var etcdConfig EtcdConfig
-	if err := json.Unmarshal(etcdSecretJsonData, &etcdConfig); err != nil {
+	if err = json.Unmarshal(etcdSecretJsonData, &etcdConfig); err != nil {
 		return fmt.Errorf("failed to parse etcd config json: %w", err)
 	}
 
-	var err error
 	mes.etcdClient, err = CreateEtcdClient(etcdConfig, etcdSecret.Data, mes.logger)
 	if err != nil {
 		return fmt.Errorf("Failed to connect to Etcd: %w", err)
