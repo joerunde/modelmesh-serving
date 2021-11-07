@@ -33,6 +33,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/kserve/modelmesh-serving/controllers/modelmesh"
 
@@ -69,7 +70,7 @@ type ServiceReconciler struct {
 	ConfigMapName        types.NamespacedName
 	ControllerDeployment types.NamespacedName
 
-	ModelMeshService map[string]*mmesh.MMService
+	ModelMeshService *sync.Map
 	ModelEventStream *mmesh.ModelMeshEventStream
 
 	ServiceMonitorCRDExists bool
@@ -98,17 +99,21 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 			}
 		}
-		if mms := r.ModelMeshService[namespace]; mms != nil {
-			mms.Disconnect()
-			delete(r.ModelMeshService, namespace)
+		//if mms := r.ModelMeshService[namespace]; mms != nil {
+		if mmsi, _ := r.ModelMeshService.Load(namespace); mmsi != nil {
+			mmsi.(*mmesh.MMService).Disconnect()
+			//delete(r.ModelMeshService, namespace)
+			r.ModelMeshService.Delete(namespace)
 		}
 		return ctrl.Result{}, err
 	}
 
-	mms, ok := r.ModelMeshService[namespace]
-	if !ok {
+	var mms *mmesh.MMService
+	if mmsi, _ := r.ModelMeshService.Load(namespace); mmsi != nil {
+		mms = mmsi.(*mmesh.MMService)
+	} else {
 		mms = mmesh.NewMMService(namespace)
-		r.ModelMeshService[namespace] = mms
+		r.ModelMeshService.Store(namespace, mms)
 	}
 
 	cfg := r.ConfigProvider.GetConfig()
@@ -306,7 +311,9 @@ func (r *ServiceReconciler) ReconcileServiceMonitor(ctx context.Context, metrics
 	r.Log.V(1).Info("Applying Service Monitor")
 
 	sm := &monitoringv1.ServiceMonitor{}
-	serviceName := r.ModelMeshService[owner.GetName()].Name
+	mmsi, _ := r.ModelMeshService.Load(owner.GetName())
+
+	serviceName := mmsi.(*mmesh.MMService).Name
 
 	err := r.Client.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: owner.GetName()}, sm)
 	exists := true

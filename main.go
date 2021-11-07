@@ -22,6 +22,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/kserve/modelmesh-serving/pkg/predictor_source"
@@ -228,7 +229,7 @@ func main() {
 	}
 
 	//mmService := mmesh.NewMMService()
-	mmServiceMap := make(map[string]*mmesh.MMService)
+	mmServiceMap := new(sync.Map)
 
 	modelEventStream, err := mmesh.NewModelEventStream(ctrl.Log.WithName("ModelMeshEventStream"),
 		mgr.GetClient(), ControllerNamespace)

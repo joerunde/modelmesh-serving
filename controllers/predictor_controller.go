@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kserve/modelmesh-serving/pkg/predictor_source"
@@ -57,7 +58,7 @@ const (
 type PredictorReconciler struct {
 	client.Client
 	Log       logr.Logger
-	MMService map[string]*mmesh.MMService //TODO synchronize .. sync.Map
+	MMService *sync.Map
 
 	RegistryLookup map[string]predictor_source.PredictorRegistry
 }
@@ -74,8 +75,6 @@ type PredictorReconciler struct {
 func (pr *PredictorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	nname := req.NamespacedName
 	namespace := nname.Namespace
-	log := pr.Log.WithValues("namespacedName", nname)
-	log.Info("in predictor Reconcile ========")
 
 	// Check if namespace has a source prefix
 	i := strings.LastIndex(namespace, "_")
@@ -95,11 +94,11 @@ func (pr *PredictorReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 func (pr *PredictorReconciler) getMMClient(namespace string) mmeshapi.ModelMeshClient {
-	mms := pr.MMService[namespace]
-	if mms == nil {
+	mmsi, _ := pr.MMService.Load(namespace)
+	if mmsi == nil {
 		return nil
 	}
-	return mms.MMClient()
+	return mmsi.(*mmesh.MMService).MMClient()
 }
 
 func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname types.NamespacedName,
@@ -107,13 +106,11 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	resourceType := registry.GetSourceName()
 	log := pr.Log.WithValues("namespacedName", nname, "source", resourceType)
 	log.V(1).Info("ReconcilePredictor called")
-	log.Info("in predictor ReconcilePredictor 1 ========")
 
 	predictor, err := registry.Get(ctx, nname)
 	if (predictor == nil && err == nil) || errors.IsNotFound(err) {
 		return pr.handlePredictorNotFound(ctx, nname, sourceId)
 	}
-	log.Info("in predictor ReconcilePredictor 2 ========", "nname.Namespace", nname.Namespace)
 
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to fetch CR from kubebuilder cache for predictor %s: %w",
@@ -124,17 +121,10 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	waitingBefore := status.WaitingForRuntime()
 	updateStatus := false
 	mmc := pr.getMMClient(nname.Namespace)
-	log.Info("in predictor ReconcilePredictor 3 ========", "len(pr.MMService)", len(pr.MMService))
-	log.Info("in predictor ReconcilePredictor 3 ========", "mmc", mmc)
-	for k, v := range pr.MMService {
-		pr.Log.Info("in ReconcilePredictor 3 ===========", "key", k)
-		pr.Log.Info("in ReconcilePredictor 3 ===========", "value", v)
-	}
 
 	var finalErr error
 	if predictor.Spec.Storage != nil && predictor.Spec.Storage.S3 == nil {
 		log.Info("Only S3 Storage currently supported", "Storage", predictor.Spec.Storage)
-		log.Info("in predictor ReconcilePredictor 4 ========", "mmc", mmc)
 		if mmc != nil {
 			// Don't update invalid spec but still check vmodel status to sync the existing model states
 			vModelState, err := mmc.GetVModelStatus(ctx, &mmeshapi.GetVModelStatusRequest{
@@ -166,7 +156,6 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	} else if mmc != nil {
 		// This determines whether we should trigger an explicit load of the model
 		// as part of the update, e.g. if the predictor is new or transitioning
-		log.Info("in predictor ReconcilePredictor 4.1 ========")
 		loadNow := predictor.DeletionTimestamp == nil &&
 			(status.ActiveModelState == api.Pending ||
 				status.ActiveModelState == api.FailedToLoad ||
@@ -176,13 +165,11 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 		// Update vModel - idempotent
 		vModelState, err := pr.setVModel(ctx, mmc, predictor, loadNow, sourceId)
 		if err == nil {
-			log.Info("in predictor ReconcilePredictor 4.1 ========")
 			log.Info("SetVModel succeeded", "vmodelName", predictor.GetName(),
 				/*"concreteModelName", concreteModelName,*/ "SetVModelResponse", vModelState)
 
 			updateStatus = pr.updatePredictorStatusFromVModel(status, vModelState, nname, true)
 		} else if isNoAddresses(err) {
-			log.Info("in predictor ReconcilePredictor 4.2 ========")
 			updateStatus = setStatusFailureInfo(status, &api.FailureInfo{
 				Reason:  api.RuntimeUnhealthy,
 				Message: "Waiting for runtime Pod to become available",
@@ -191,7 +178,6 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 		} else if grpcstatus.Convert(err).Code() == codes.AlreadyExists {
 			//TODO here should also extract the conflicting owner string, and also trigger a reconcile with that
 			// other source id (in case it no longer exists)
-			log.Info("in predictor ReconcilePredictor 4.3 ========")
 			updateStatus = setStatusFailureInfo(status, &api.FailureInfo{
 				Reason:  api.InvalidPredictorSpec,
 				Message: "Predictor already exists with the same name from a different source",
@@ -200,7 +186,6 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 				" from different source: %w", predictor.GetName(), resourceType, err)
 		} else {
 			//TODO depending on kind of error we may want to update transition status to reflect
-			log.Info("in predictor ReconcilePredictor 4.4 ========")
 			finalErr = fmt.Errorf("failed to SetVModel for %s %s: %w", resourceType, predictor.GetName(), err)
 		}
 	}
@@ -226,7 +211,6 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 	if finalErr != nil {
 		return ctrl.Result{}, finalErr
 	}
-	log.Info("in predictor ReconcilePredictor 5 ========")
 
 	if mmc == nil || status.WaitingForRuntime() {
 		// Waiting for modelmesh client to connect or for runtime Pod to become available
@@ -235,7 +219,6 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 		// since it will trigger a load of the model automatically and this will result in an etcd event.
 		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil //TODO maybe some back-off
 	}
-	log.Info("in predictor ReconcilePredictor 6 ========")
 	if status.ActiveModelState == api.Loading {
 		// This is currently required since there's no explicit event in model-mesh etcd
 		// corresponding to loading completion. We plan to change this but in the meantime
@@ -243,7 +226,6 @@ func (pr *PredictorReconciler) ReconcilePredictor(ctx context.Context, nname typ
 		// because we will get a vmodel state change event when that completes.
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil //TODO maybe some back-off
 	}
-	log.Info("in predictor ReconcilePredictor 7 ========")
 
 	return ctrl.Result{}, nil
 }
@@ -304,8 +286,6 @@ func (pr *PredictorReconciler) handlePredictorNotFound(ctx context.Context,
 func (pr *PredictorReconciler) setVModel(ctx context.Context, mmc mmeshapi.ModelMeshClient,
 	predictor *api.Predictor, loadNow bool, sourceId string) (*mmeshapi.VModelStatusInfo, error) {
 	spec := &predictor.Spec
-	log := pr.Log.WithValues("predictor", predictor)
-	log.Info("in predictor setVModel 1 ========")
 
 	setVmodelCtx, cancel := context.WithTimeout(ctx, GrpcRequestTimeout)
 	defer cancel()
@@ -325,9 +305,6 @@ func (pr *PredictorReconciler) setVModel(ctx context.Context, mmc mmeshapi.Model
 	if err != nil {
 		return nil, fmt.Errorf("error json-marshalling VModel parameters: %w", err)
 	}
-	log.Info("in predictor setVModel 2 ========", "predictor.GetName()", predictor.GetName())
-	log.Info("in predictor setVModel 2 ========", "sourceId", sourceId)
-	log.Info("in predictor setVModel 2 ========", "concreteModelName(predictor, sourceId)", concreteModelName(predictor, sourceId))
 
 	return mmc.SetVModel(setVmodelCtx, &mmeshapi.SetVModelRequest{
 		VModelId:              predictor.GetName(),
@@ -480,8 +457,9 @@ func (pr *PredictorReconciler) updatePredictorStatusFromVModel(status *api.Predi
 
 	status.Available = status.ActiveModelState != "" &&
 		status.ActiveModelState != api.FailedToLoad && !status.WaitingForRuntime()
-	status.GrpcEndpoint = fmt.Sprintf("grpc://%s", pr.MMService[name.Namespace].InferenceEndpoint())
-	status.HTTPEndpoint = pr.MMService[name.Namespace].InferenceRESTEndpoint()
+	mmsi, _ := pr.MMService.Load(name.Namespace)
+	status.GrpcEndpoint = fmt.Sprintf("grpc://%s", mmsi.(*mmesh.MMService).InferenceEndpoint())
+	status.HTTPEndpoint = mmsi.(*mmesh.MMService).InferenceRESTEndpoint()
 
 	// This will be reinstated once the loading/loaded counts are added back to the Predictor CRD Status
 	//if counts != [3]int{status.LoadingCopies, status.LoadedCopies, status.FailedCopies} {
