@@ -29,10 +29,12 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/kserve/modelmesh-serving/pkg/mmesh"
 	"github.com/kserve/modelmesh-serving/pkg/predictor_source"
 
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -123,6 +125,37 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	//  read etcd secret from controller namespace, replace rootprefix with ns-specific one
 	//  and the create/update etcd secret (with same name) in _this_ namespace
 	//  and include an "ownership" label similar to the tc-config configmap
+
+	if req.Namespace != r.ControllerNamespace {
+		// get the controller secret
+		s := &corev1.Secret{}
+		err = r.Client.Get(ctx, types.NamespacedName{
+			Name:      r.ConfigProvider.GetConfig().GetEtcdSecretName(),
+			Namespace: r.ControllerNamespace,
+		}, s)
+		if err != nil {
+			return RequeueResult, fmt.Errorf("Could not get the controller etcd secret: %w", err)
+		}
+
+		data := s.Data[modelmesh.EtcdSecretKey]
+		etcdConfig := mmesh.EtcdConfig{}
+		if err = json.Unmarshal(data, &etcdConfig); err != nil {
+			return RequeueResult, fmt.Errorf("failed to parse etcd config json: %w", err)
+		}
+
+		es := mmesh.EtcdSecret{
+			Log:                 ctrl.Log.WithName("etcdSecret"),
+			Name:                r.ConfigProvider.GetConfig().GetEtcdSecretName(),
+			Namespace:           req.Namespace,
+			ControllerNamespace: r.ControllerNamespace,
+			EtcdConfig:          &etcdConfig,
+			Scheme:              r.Scheme,
+		}
+
+		if err = es.Apply(ctx, r.Client); err != nil {
+			return RequeueResult, fmt.Errorf("Could not apply the modelmesh etcd secret: %w", err)
+		}
+	}
 
 	//reconcile this serving runtime
 	rt := &api.ServingRuntime{}
