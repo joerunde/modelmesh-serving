@@ -144,8 +144,8 @@ func reconcile(t *testing.T, kr *KubeResolver) {
 
 func makeKubeResolver(namespace string, client client.Client) *KubeResolver {
 	return &KubeResolver{
-		namespace: namespace, Client: client,
-		resolvers: make(map[string][]*serviceResolver, 2),
+		Client:    client,
+		resolvers: make(map[types.NamespacedName][]*serviceResolver, 2),
 		logger:    zap.New(zap.UseDevMode(true)).WithName("KubeResolver"),
 	}
 }

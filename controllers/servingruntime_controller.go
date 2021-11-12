@@ -92,23 +92,57 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	log := r.Log.WithValues("servingruntime", req.NamespacedName)
 	log.V(1).Info("ServingRuntime reconciler called")
 
-	//TODO make sure the namespace has serving enabled
+	// Make sure the namespace has serving enabled
+	n := &corev1.Namespace{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: req.Namespace}, n); err != nil {
+		return RequeueResult, err
+	}
+	if !r.modelMeshEnabled(n) {
+		// Don't do anything
+		return RequeueResult, nil
+	}
 
-	// Reconcile the model mesh cluster config map
+	// Reconcile the model mesh cluster config map and etcd secret
 	runtimes := &api.ServingRuntimeList{}
-	err := r.Client.List(ctx, runtimes)
+	err := r.List(ctx, runtimes, client.InNamespace(req.Namespace))
 	if err != nil {
 		return RequeueResult, err
 	}
 
-	//d := &appsv1.Deployment{}
-	//err = r.Client.Get(ctx, types.NamespacedName{
-	//	Name:      r.ControllerName,
-	//	Namespace: r.ControllerNamespace,
-	//}, d)
-	//if err != nil {
-	//	return RequeueResult, fmt.Errorf("Could not get the controller deployment: %w", err)
-	//}
+	// Delete etcd secret and configmap when there is no ServingRuntimes in a
+	// namespace
+	if len(runtimes.Items) == 0 {
+		// We don't delete the etcd secret in the controller namespace
+		if req.Namespace != r.ControllerNamespace {
+			s := &corev1.Secret{}
+			err = r.Client.Get(ctx, types.NamespacedName{
+				Name:      r.ConfigProvider.GetConfig().GetEtcdSecretName(),
+				Namespace: req.Namespace,
+			}, s)
+
+			if err == nil {
+				err = r.Delete(ctx, s)
+			} else if errors.IsNotFound(err) {
+				err = nil
+			}
+			if err != nil {
+				return RequeueResult, err
+			}
+		}
+
+		cm := &corev1.ConfigMap{}
+		err = r.Client.Get(ctx, types.NamespacedName{
+			Name:      modelmesh.InternalConfigMapName,
+			Namespace: req.Namespace,
+		}, cm)
+		if err == nil {
+			err = r.Delete(ctx, cm)
+		} else if errors.IsNotFound(err) {
+			err = nil
+		}
+
+		return RequeueResult, err
+	}
 
 	cc := modelmesh.ClusterConfig{
 		Runtimes:  runtimes,
@@ -116,7 +150,6 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		Scheme:    r.Scheme,
 	}
 
-	//TODO OWNERSHIP FOR tc-config configmap
 	if err = cc.Apply(ctx, r.Client); err != nil {
 		return RequeueResult, fmt.Errorf("Could not apply the modelmesh type-constraints configmap: %w", err)
 	}
@@ -388,6 +421,17 @@ func (r *ServingRuntimeReconciler) getRuntimesSupportingPredictor(ctx context.Co
 	}
 
 	return srnns, nil
+}
+
+func (r *ServingRuntimeReconciler) modelMeshEnabled(n *corev1.Namespace) bool {
+	if n == nil {
+		return false
+	}
+	if v, ok := n.Labels["modelmesh-enabled"]; ok {
+		return v == "true"
+	} else {
+		return n.Name == r.ControllerNamespace
+	}
 }
 
 func (r *ServingRuntimeReconciler) SetupWithManager(mgr ctrl.Manager,
