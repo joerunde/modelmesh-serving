@@ -407,6 +407,21 @@ func (r *ServingRuntimeReconciler) SetupWithManager(mgr ctrl.Manager,
 		Watches(&source.Kind{Type: &api.Predictor{}},
 			handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
 				return r.runtimeRequestsForPredictor(o.(*api.Predictor), "Predictor")
+			})).
+		Watches(&source.Kind{Type: &corev1.Secret{}},
+			handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
+
+				// Trigger reconciliation for model-mesh-enabled runtimes when the etcd connection secret changes
+				etcdSecretName := r.ConfigProvider.GetConfig().GetEtcdSecretName()
+				if o.GetName() != etcdSecretName {
+					return []reconcile.Request{}
+				}
+
+				return r.requestsForRuntimes("", func(rt *kserveapi.ServingRuntime) bool {
+					mme, err := modelMeshEnabled2(context.TODO(), rt.GetNamespace(),
+						r.ControllerNamespace, r.Client, r.HasNamespaceAccess)
+					return err != nil || mme // in case of error just reconcile anyhow
+				})
 			}))
 
 	if r.HasNamespaceAccess {

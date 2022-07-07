@@ -111,6 +111,7 @@ func (mes *ModelMeshEventStream) UpdateWatchedService(ctx context.Context,
 		mes.watchedServices[namespace] = nw
 	}
 
+	// TODO: be able to refresh the etcd connection here when the secret changes
 	if etcdSecretName != mes.secretName {
 		// etcd config secret changed
 		mes.logger.V(1).Info("Etcd config secret changed. Creating a new etcd client and restarting watchers.",
