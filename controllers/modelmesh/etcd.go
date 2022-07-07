@@ -25,7 +25,9 @@ const (
 
 //mimics base/patches/etcd.yaml
 func (m *Deployment) configureMMDeploymentForEtcdSecret(deployment *appsv1.Deployment) error {
-	EtcdSecretName := m.EtcdSecretName
+	EtcdSecretName := m.EtcdSecret.Name //EtcdSecretName
+
+	deployment.Labels["etcd.connection.hash"] = m.EtcdSecret.Hash()
 
 	for containerI, container := range deployment.Spec.Template.Spec.Containers {
 		if container.Name == ModelMeshContainerName {

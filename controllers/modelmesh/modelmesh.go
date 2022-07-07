@@ -16,6 +16,7 @@ package modelmesh
 import (
 	"context"
 	"fmt"
+	"github.com/kserve/modelmesh-serving/pkg/mmesh"
 	"strconv"
 
 	"github.com/go-logr/logr"
@@ -66,7 +67,7 @@ type Deployment struct {
 	Port                uint16
 	TLSSecretName       string
 	TLSClientAuth       string
-	EtcdSecretName      string
+	EtcdSecret          *mmesh.EtcdSecret
 	ServiceAccountName  string
 	GrpcMaxMessageSize  int
 	AnnotationConfigMap *corev1.ConfigMap

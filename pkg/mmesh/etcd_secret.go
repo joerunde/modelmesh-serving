@@ -15,15 +15,17 @@ package mmesh
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/kserve/modelmesh-serving/controllers/modelmesh"
 	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/go-logr/logr"
-	"github.com/kserve/modelmesh-serving/controllers/modelmesh"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,6 +41,13 @@ type EtcdSecret struct {
 	ControllerNamespace string
 	EtcdConfig          *EtcdConfig
 	Scheme              *runtime.Scheme
+}
+
+// Hash returns a 10-character hash string of the secret values
+func (es EtcdSecret) Hash() string {
+	b, _ := json.Marshal(es.EtcdConfig)
+	hsha1 := sha1.Sum(b)
+	return hex.EncodeToString(hsha1[:5])
 }
 
 func (es EtcdSecret) Apply(ctx context.Context, cl client.Client) error {

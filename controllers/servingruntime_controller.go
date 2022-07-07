@@ -141,27 +141,9 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// If not controller namespace then read etcd secret from controller namespace,
 		// replace rootprefix with ns-specific one, and then create/update etcd secret (with same name)
 		// in _this_ namespace and include labels similar to the tc-config configmap
-		s := &corev1.Secret{}
-		if err = r.Client.Get(ctx, types.NamespacedName{
-			Name:      etcdSecretName,
-			Namespace: r.ControllerNamespace,
-		}, s); err != nil {
-			return RequeueResult, fmt.Errorf("Could not get the controller etcd secret: %w", err)
-		}
-
-		data := s.Data[modelmesh.EtcdSecretKey]
-		etcdConfig := mmesh.EtcdConfig{}
-		if err = json.Unmarshal(data, &etcdConfig); err != nil {
-			return RequeueResult, fmt.Errorf("failed to parse etcd config json: %w", err)
-		}
-
-		es := mmesh.EtcdSecret{
-			Log:                 ctrl.Log.WithName("etcdSecret"),
-			Name:                etcdSecretName,
-			Namespace:           req.Namespace,
-			ControllerNamespace: r.ControllerNamespace,
-			EtcdConfig:          &etcdConfig,
-			Scheme:              r.Scheme,
+		es, err := r.getEtcdSecret(ctx, req, etcdSecretName)
+		if err != nil {
+			return RequeueResult, err
 		}
 
 		if err = es.Apply(ctx, r.Client); err != nil {
@@ -192,6 +174,11 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("Invalid ServingRuntime Spec: %w", err)
 	}
 
+	es, err := r.getEtcdSecret(ctx, req, etcdSecretName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// construct the deployment
 	mmDeployment := modelmesh.Deployment{
 		ServiceName:                cfg.InferenceServiceName,
@@ -219,7 +206,7 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Replicas is set below
 		TLSSecretName:       cfg.TLS.SecretName,
 		TLSClientAuth:       cfg.TLS.ClientAuth,
-		EtcdSecretName:      cfg.GetEtcdSecretName(),
+		EtcdSecret:          &es,
 		ServiceAccountName:  cfg.ServiceAccountName,
 		EnableAccessLogging: cfg.EnableAccessLogging,
 		Client:              r.Client,
@@ -251,6 +238,32 @@ func (r *ServingRuntimeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("could not apply the model mesh deployment: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: requeueDuration}, nil
+}
+
+func (r *ServingRuntimeReconciler) getEtcdSecret(ctx context.Context, req ctrl.Request, etcdSecretName string) (mmesh.EtcdSecret, error) {
+	s := &corev1.Secret{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      etcdSecretName,
+		Namespace: r.ControllerNamespace,
+	}, s); err != nil {
+		return mmesh.EtcdSecret{}, fmt.Errorf("Could not get the controller etcd secret: %w", err)
+	}
+
+	data := s.Data[modelmesh.EtcdSecretKey]
+	etcdConfig := mmesh.EtcdConfig{}
+	if err:= json.Unmarshal(data, &etcdConfig); err != nil {
+		return mmesh.EtcdSecret{}, fmt.Errorf("failed to parse etcd config json: %w", err)
+	}
+
+	es := mmesh.EtcdSecret{
+		Log:                 ctrl.Log.WithName("etcdSecret"),
+		Name:                etcdSecretName,
+		Namespace:           req.Namespace,
+		ControllerNamespace: r.ControllerNamespace,
+		EtcdConfig:          &etcdConfig,
+		Scheme:              r.Scheme,
+	}
+	return es, nil
 }
 
 func (r *ServingRuntimeReconciler) determineReplicasAndRequeueDuration(ctx context.Context, log logr.Logger,
